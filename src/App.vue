@@ -173,7 +173,7 @@ function resetSettings() {
     <header class="hdr">
       <img src="./assets/logo.svg" alt="" class="kaspar-logo">
       <h1>PDF Address Mover</h1>
-      <span class="sub">Reposition shipping addresses for Dokumenttasche</span>
+      <span class="sub">Reposition shipping addresses for Packing Slips</span>
     </header>
 
     <div class="body">
