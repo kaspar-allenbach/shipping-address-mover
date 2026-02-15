@@ -3,7 +3,9 @@
 # 📦 PDF Address Mover
 
 Client-side web app to reposition shipping addresses on order PDFs for correct
-Dokumenttasche window placement.
+Packaging Slip window placement.
+
+Website: https://kaspar-allenbach.github.io/shipping-address-mover/
 
 ## Features
 
