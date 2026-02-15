@@ -172,7 +172,7 @@ function resetSettings() {
   <div class="app">
     <header class="hdr">
       <img src="./assets/logo.svg" alt="" class="kaspar-logo">
-      <h1>PDF Address Mover</h1>
+      <h1>Kaspars PDF Address Mover</h1>
       <span class="sub">Reposition shipping addresses for Packing Slips. So you can use <a href="https://shop.post.ch/de/verpacken-versenden/paketversand/dokumententaschen-c6-5-150-stk-080560/p/560652?eqrecqid=89aab231-0a9b-11f1-83e5-000074caec6e">these bad boys</a>.</span>
     </header>
 
