@@ -283,6 +283,7 @@ function resetSettings() {
             <li>This shit is vibecoded so beware! <a href="https://github.com/kaspar-allenbach/shipping-address-mover">Contribute</a></li>
             <li>It is made for the Fullfilment Guru Plugin of Shopify but works on every PDF. So you can Use it for any shipping label!</li>
             <li>All actions are made in your Browser (no data is sent to any server)</li>
+            <li>Your settings and coordinates will be saved in your Browser so once you have your coordinates you can just push your PDF's trough the gauntlet.</li>
           </ul>
           
         </div>
