@@ -188,7 +188,7 @@ function resetSettings() {
   <div class="app">
     <header class="hdr">
       <img src="./assets/logo.svg" alt="" class="kaspar-logo">
-      <h1> Chäschpus PDF Address Mover</h1>
+      <h1> Kaspars PDF Address Mover</h1>
       <span class="sub">
         Reposition shipping addresses for Dokumenttasche. <a href="https://github.com/kaspar-allenbach/shipping-address-mover">Github</a></span>
     </header>
