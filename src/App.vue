@@ -173,7 +173,7 @@ function resetSettings() {
     <header class="hdr">
       <img src="./assets/logo.svg" alt="" class="kaspar-logo">
       <h1>PDF Address Mover</h1>
-      <span class="sub">Reposition shipping addresses for Packing Slips</span>
+      <span class="sub">Reposition shipping addresses for Packing Slips.</span>
     </header>
 
     <div class="body">
@@ -274,6 +274,17 @@ function resetSettings() {
         <div v-if="error" class="err">
           ⚠️ {{ error }}
           <button class="x-btn" @click="error = ''">×</button>
+        </div>
+        <div class="card">
+          <h2 class="card-title">Info</h2>
+          <ul>
+            <li>Made for the  <a href="https://www.supportyourlocalartist.ch/en">Support your local Artist Shop</a></li>
+            <li>Made by <a href="https://www.supportyourlocalartist.ch/collections/kaspar-allenbach">Kaspar Allenbach</a></li>
+            <li>This shit is vibecoded so beware! <a href="https://github.com/kaspar-allenbach/shipping-address-mover">Contribute</a></li>
+            <li>It is made for the Fullfilment Guru Plugin of Shopify but works on every PDF. So you can Use it for any shipping label!</li>
+            <li>All actions are made in your Browser (no data is sent to any server)</li>
+          </ul>
+          
         </div>
       </aside>
 
