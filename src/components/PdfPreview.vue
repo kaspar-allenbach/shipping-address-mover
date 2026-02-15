@@ -7,25 +7,26 @@ const props = defineProps({
   mode:       { type: String, default: 'idle' },
   sourceRect: { type: Object, default: null },
   destPoint:  { type: Object, default: null },
+  coverRect:  { type: Object, default: null },
 })
-const emit = defineEmits(['source-selected', 'destination-set', 'page-info'])
+const emit = defineEmits(['source-selected', 'destination-set', 'cover-selected', 'page-info'])
 
-// ── core refs ──
 const container   = ref(null)
 const pdfCanvas   = ref(null)
 const renderInfo  = ref(null)
 const isRendering = ref(false)
 const mousePos    = ref(null)
 
-// drawing state (select-source mode)
-const isDrawing   = ref(false)
-const drawStart   = ref(null)
-const drawCurrent = ref(null)
+// drawing
+const isDrawing    = ref(false)
+const drawTarget   = ref('source') // 'source' | 'cover'
+const drawStart    = ref(null)
+const drawCurrent  = ref(null)
 
-// drag / resize state (idle mode)
-const isDragging  = ref(false)
-const dragState   = ref(null) // { type, which, handle, startX, startY, orig }
-const dragRect    = ref(null) // { which, left, top, width, height } px
+// drag / resize
+const isDragging = ref(false)
+const dragState  = ref(null)
+const dragRect   = ref(null)
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 const CURSOR  = {
@@ -33,11 +34,11 @@ const CURSOR  = {
   se: 'se-resize', s: 'ns-resize', sw: 'sw-resize', w: 'ew-resize',
 }
 
-// ── computed ──
-const isIdle         = computed(() => props.mode === 'idle' && !isDrawing.value)
-const isInteractMode = computed(() => props.mode === 'select-source' || props.mode === 'set-destination')
+const isIdle = computed(() => props.mode === 'idle' && !isDrawing.value)
+const isInteractMode = computed(() =>
+  props.mode === 'select-source' || props.mode === 'set-destination' || props.mode === 'select-cover'
+)
 
-// helpers
 const mmToPx = mm => renderInfo.value ? mm * MM_TO_PT * renderInfo.value.scale : 0
 const pxToMm = px => renderInfo.value
   ? Math.round(px / renderInfo.value.scale * PT_TO_MM * 10) / 10 : 0
@@ -51,25 +52,31 @@ function canvasCoords(e) {
   }
 }
 
-// pixel rects from props
+// ── pixel rects from props ──
 const srcPx = computed(() => {
-  const s = props.sourceRect
-  if (!s || !renderInfo.value) return null
+  const s = props.sourceRect; if (!s || !renderInfo.value) return null
   return { left: mmToPx(s.x), top: mmToPx(s.y), width: mmToPx(s.width), height: mmToPx(s.height) }
 })
 const dstPx = computed(() => {
-  const d = props.destPoint, s = props.sourceRect
-  if (!d || !s || !renderInfo.value) return null
+  const d = props.destPoint, s = props.sourceRect; if (!d || !s || !renderInfo.value) return null
   return { left: mmToPx(d.x), top: mmToPx(d.y), width: mmToPx(s.width), height: mmToPx(s.height) }
 })
+const covPx = computed(() => {
+  const c = props.coverRect; if (!c || !renderInfo.value) return null
+  return { left: mmToPx(c.x), top: mmToPx(c.y), width: mmToPx(c.width), height: mmToPx(c.height) }
+})
 
-// display styles — use drag override while dragging, otherwise props
+// ── display styles (drag overrides) ──
 const toCSS = r => r
-  ? { left: r.left+'px', top: r.top+'px', width: r.width+'px', height: r.height+'px' }
-  : null
+  ? { left: r.left+'px', top: r.top+'px', width: r.width+'px', height: r.height+'px' } : null
 
 const srcStyle  = computed(() => toCSS(dragRect.value?.which === 'source' ? dragRect.value : srcPx.value))
 const dstStyle  = computed(() => toCSS(dragRect.value?.which === 'dest'   ? dragRect.value : dstPx.value))
+const covStyle  = computed(() => toCSS(dragRect.value?.which === 'cover'  ? dragRect.value : covPx.value))
+
+const drawClass = computed(() =>
+  isDrawing.value && drawTarget.value === 'cover' ? 'drawing-cov' : 'drawing'
+)
 const drawStyle = computed(() => {
   if (!isDrawing.value || !drawStart.value || !drawCurrent.value) return null
   const x = Math.min(drawStart.value.x, drawCurrent.value.x)
@@ -108,15 +115,15 @@ onUnmounted(() => {
   window.removeEventListener('mousemove', onDragMove)
   window.removeEventListener('mouseup',   onDragEnd)
   clearTimeout(rTimer)
-  document.body.style.cursor = ''
-  document.body.style.userSelect = ''
+  document.body.style.cursor = ''; document.body.style.userSelect = ''
 })
 
-// ── drawing (select-source / set-destination) ──
+// ── drawing ──
 function onInteractDown(e) {
-  if (props.mode === 'select-source') {
+  if (props.mode === 'select-source' || props.mode === 'select-cover') {
     const c = canvasCoords(e)
     isDrawing.value = true
+    drawTarget.value = props.mode === 'select-cover' ? 'cover' : 'source'
     drawStart.value = c; drawCurrent.value = { ...c }
     window.addEventListener('mousemove', onDrawMove)
     window.addEventListener('mouseup',   onDrawUp)
@@ -134,8 +141,10 @@ function onDrawUp() {
       const y1 = Math.min(drawStart.value.y, drawCurrent.value.y)
       const x2 = Math.max(drawStart.value.x, drawCurrent.value.x)
       const y2 = Math.max(drawStart.value.y, drawCurrent.value.y)
-      if (x2 - x1 > 10 && y2 - y1 > 10)
-        emit('source-selected', { x: pxToMm(x1), y: pxToMm(y1), width: pxToMm(x2-x1), height: pxToMm(y2-y1) })
+      if (x2 - x1 > 10 && y2 - y1 > 10) {
+        const r = { x: pxToMm(x1), y: pxToMm(y1), width: pxToMm(x2-x1), height: pxToMm(y2-y1) }
+        emit(drawTarget.value === 'cover' ? 'cover-selected' : 'source-selected', r)
+      }
     }
     drawStart.value = drawCurrent.value = null
   }
@@ -143,25 +152,23 @@ function onDrawUp() {
   window.removeEventListener('mouseup',   onDrawUp)
 }
 
-// ── drag & resize (idle mode) ──
-function onRectDown(which, e) {
-  if (!isIdle.value) return
-  startDrag(which, 'move', null, e)
-}
-function onHandleDown(which, handle, e) {
-  if (!isIdle.value) return
-  startDrag(which, 'resize', handle, e)
+// ── drag & resize ──
+function onRectDown(which, e)          { if (isIdle.value) startDrag(which, 'move', null, e) }
+function onHandleDown(which, handle, e) { if (isIdle.value) startDrag(which, 'resize', handle, e) }
+
+function getPxRect(which) {
+  if (which === 'source') return srcPx.value
+  if (which === 'cover')  return covPx.value
+  return dstPx.value
 }
 
 function startDrag(which, type, handle, e) {
-  const c    = canvasCoords(e)
-  const orig = { ...(which === 'source' ? srcPx.value : dstPx.value) }
-
+  const c = canvasCoords(e)
+  const orig = { ...getPxRect(which) }
   isDragging.value = true
-  dragState.value  = { type, which, handle, startX: c.x, startY: c.y, orig }
-  dragRect.value   = { which, ...orig }
-
-  document.body.style.cursor     = handle ? CURSOR[handle] : 'move'
+  dragState.value = { type, which, handle, startX: c.x, startY: c.y, orig }
+  dragRect.value  = { which, ...orig }
+  document.body.style.cursor = handle ? CURSOR[handle] : 'move'
   document.body.style.userSelect = 'none'
   window.addEventListener('mousemove', onDragMove)
   window.addEventListener('mouseup',   onDragEnd)
@@ -169,14 +176,12 @@ function startDrag(which, type, handle, e) {
 
 function onDragMove(e) {
   const ds = dragState.value; if (!ds) return
-  const c  = canvasCoords(e)
-  const dx = c.x - ds.startX
-  const dy = c.y - ds.startY
+  const c = canvasCoords(e)
+  const dx = c.x - ds.startX, dy = c.y - ds.startY
   let { left, top, width, height } = ds.orig
 
-  if (ds.type === 'move') {
-    left += dx; top += dy
-  } else {
+  if (ds.type === 'move') { left += dx; top += dy }
+  else {
     const h = ds.handle
     if (h.includes('w')) { left += dx; width  -= dx }
     if (h.includes('e')) {              width  += dx }
@@ -184,14 +189,11 @@ function onDragMove(e) {
     if (h.includes('s')) {              height += dy }
   }
 
-  // enforce minimum size
   const MIN = 10
   if (width  < MIN) { width  = MIN; if (ds.handle?.includes('w')) left = ds.orig.left + ds.orig.width  - MIN }
   if (height < MIN) { height = MIN; if (ds.handle?.includes('n')) top  = ds.orig.top  + ds.orig.height - MIN }
 
-  // clamp to canvas
-  const cw = pdfCanvas.value?.width  ?? 9999
-  const ch = pdfCanvas.value?.height ?? 9999
+  const cw = pdfCanvas.value?.width ?? 9999, ch = pdfCanvas.value?.height ?? 9999
   left = Math.max(0, Math.min(left, cw - width))
   top  = Math.max(0, Math.min(top,  ch - height))
 
@@ -201,10 +203,10 @@ function onDragMove(e) {
 function onDragEnd() {
   const r = dragRect.value
   if (r) {
-    if (r.which === 'source')
-      emit('source-selected', { x: pxToMm(r.left), y: pxToMm(r.top), width: pxToMm(r.width), height: pxToMm(r.height) })
-    else
-      emit('destination-set', { x: pxToMm(r.left), y: pxToMm(r.top) })
+    const mm = { x: pxToMm(r.left), y: pxToMm(r.top), width: pxToMm(r.width), height: pxToMm(r.height) }
+    if (r.which === 'source') emit('source-selected', mm)
+    else if (r.which === 'cover') emit('cover-selected', mm)
+    else emit('destination-set', { x: mm.x, y: mm.y })
   }
   isDragging.value = false; dragState.value = null; dragRect.value = null
   document.body.style.cursor = ''; document.body.style.userSelect = ''
@@ -212,7 +214,6 @@ function onDragEnd() {
   window.removeEventListener('mouseup',   onDragEnd)
 }
 
-// ── hover readout ──
 function onHover(e) {
   if (isDragging.value || isDrawing.value || !renderInfo.value) return
   const c = canvasCoords(e)
@@ -228,33 +229,40 @@ function onHover(e) {
          @mousemove="onHover" @mouseleave="mousePos = null">
       <canvas ref="pdfCanvas"></canvas>
 
-      <!-- ── source rectangle ── -->
-      <div v-if="srcStyle"
-           class="rect src" :class="{ interactive: isIdle }" :style="srcStyle"
+      <!-- cover rect (rendered first = behind others) -->
+      <div v-if="covStyle" class="rect cov" :class="{ interactive: isIdle }" :style="covStyle"
+           @mousedown.prevent="onRectDown('cover', $event)">
+        <span class="lbl lbl-cov">Cover</span>
+        <template v-if="isIdle">
+          <div v-for="h in HANDLES" :key="'c-'+h" class="handle cov-handle" :data-pos="h"
+               @mousedown.stop.prevent="onHandleDown('cover', h, $event)"></div>
+        </template>
+      </div>
+
+      <!-- source rect -->
+      <div v-if="srcStyle" class="rect src" :class="{ interactive: isIdle }" :style="srcStyle"
            @mousedown.prevent="onRectDown('source', $event)">
         <span class="lbl lbl-src">Source</span>
         <template v-if="isIdle">
-          <div v-for="h in HANDLES" :key="h"
-               class="handle src-handle" :data-pos="h"
+          <div v-for="h in HANDLES" :key="'s-'+h" class="handle src-handle" :data-pos="h"
                @mousedown.stop.prevent="onHandleDown('source', h, $event)"></div>
         </template>
       </div>
 
-      <!-- ── destination rectangle ── -->
-      <div v-if="dstStyle"
-           class="rect dst" :class="{ interactive: isIdle }" :style="dstStyle"
+      <!-- dest rect -->
+      <div v-if="dstStyle" class="rect dst" :class="{ interactive: isIdle }" :style="dstStyle"
            @mousedown.prevent="onRectDown('dest', $event)">
         <span class="lbl lbl-dst">Destination</span>
       </div>
 
-      <!-- ── drawing rect (while drawing new source) ── -->
-      <div v-if="drawStyle" class="rect drawing" :style="drawStyle"></div>
+      <!-- drawing rect -->
+      <div v-if="drawStyle" class="rect" :class="drawClass" :style="drawStyle"></div>
 
-      <!-- ── interaction layer (draw / click modes only) ── -->
+      <!-- interaction layer -->
       <div class="interact"
            :class="{
              active: isInteractMode,
-             'c-cross': mode === 'select-source',
+             'c-cross': mode === 'select-source' || mode === 'select-cover',
              'c-ptr':   mode === 'set-destination',
            }"
            @mousedown="onInteractDown"></div>
@@ -270,28 +278,25 @@ function onHover(e) {
 .preview { width: 100%; position: relative; }
 .loading { display: flex; align-items: center; justify-content: center; padding: 80px; color: #94a3b8; }
 
-.canvas-wrap {
-  position: relative; display: inline-block;
-  box-shadow: 0 4px 24px rgba(0,0,0,.12);
-}
+.canvas-wrap { position: relative; display: inline-block; box-shadow: 0 4px 24px rgba(0,0,0,.12); }
 .canvas-wrap canvas { display: block; border-radius: 4px; }
 
-/* ── interaction layer ── */
 .interact { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
 .interact.active { pointer-events: auto; z-index: 20; }
 .c-cross { cursor: crosshair; }
 .c-ptr   { cursor: pointer; }
 
-/* ── rectangles ── */
 .rect { position: absolute; pointer-events: none; z-index: 5; border-radius: 2px; }
 .rect.interactive { pointer-events: auto; z-index: 15; cursor: move; }
-.rect.drawing { z-index: 25; }
+.rect.drawing     { z-index: 25; }
+.rect.drawing-cov { z-index: 25; }
 
-.src     { border: 2px dashed #ef4444; background: rgba(239,68,68,.08); }
-.dst     { border: 2px dashed #22c55e; background: rgba(34,197,94,.08); }
-.drawing { border: 2px dashed #3b82f6; background: rgba(59,130,246,.08); }
+.src         { border: 2px dashed #ef4444; background: rgba(239,68,68,.08); }
+.dst         { border: 2px dashed #22c55e; background: rgba(34,197,94,.08); }
+.cov         { border: 2px dashed #94a3b8; background: rgba(255,255,255,.65); }
+.drawing     { border: 2px dashed #3b82f6; background: rgba(59,130,246,.08); }
+.drawing-cov { border: 2px dashed #94a3b8; background: rgba(255,255,255,.5); }
 
-/* ── labels ── */
 .lbl {
   position: absolute; top: -22px; left: -2px;
   font-size: 10px; font-weight: 700; padding: 2px 7px;
@@ -300,19 +305,20 @@ function onHover(e) {
 }
 .lbl-src { background: #ef4444; color: #fff; }
 .lbl-dst { background: #22c55e; color: #fff; }
+.lbl-cov { background: #94a3b8; color: #fff; }
 
-/* ── resize handles (source only) ── */
 .handle {
   position: absolute; width: 10px; height: 10px;
-  background: #fff; border: 2px solid #ef4444; border-radius: 2px;
+  background: #fff; border: 2px solid; border-radius: 2px;
   transform: translate(-50%, -50%);
   z-index: 2; pointer-events: auto;
   transition: transform .1s, box-shadow .1s;
 }
-.handle:hover {
-  transform: translate(-50%, -50%) scale(1.3);
-  box-shadow: 0 0 6px rgba(239,68,68,.45);
-}
+.handle:hover { transform: translate(-50%, -50%) scale(1.3); }
+.src-handle { border-color: #ef4444; }
+.src-handle:hover { box-shadow: 0 0 6px rgba(239,68,68,.45); }
+.cov-handle { border-color: #94a3b8; }
+.cov-handle:hover { box-shadow: 0 0 6px rgba(148,163,184,.45); }
 
 .handle[data-pos="nw"] { top: 0;    left: 0;    cursor: nw-resize; }
 .handle[data-pos="n"]  { top: 0;    left: 50%;  cursor: ns-resize; }
@@ -323,7 +329,6 @@ function onHover(e) {
 .handle[data-pos="sw"] { top: 100%; left: 0;    cursor: sw-resize; }
 .handle[data-pos="w"]  { top: 50%;  left: 0;    cursor: ew-resize; }
 
-/* ── coord badge ── */
 .coord-badge {
   position: absolute; bottom: 10px; right: 10px;
   background: rgba(0,0,0,.72); color: #fff;

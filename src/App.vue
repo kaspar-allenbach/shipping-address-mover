@@ -4,130 +4,123 @@ import DropZone from './components/DropZone.vue'
 import PdfPreview from './components/PdfPreview.vue'
 import { loadPdfForPreview, processPdf, getPageDimensions } from './utils/pdfProcessor.js'
 
-// ── state ────────────────────────────────────────────────────────────
-const files           = ref([])      // { name, arrayBuffer, pdfDoc, dims, sourceRect, destPoint }
+const files           = ref([])
 const activeIdx       = ref(-1)
-const sourceRect      = ref(null)    // working copy, synced to active file
-const destPoint       = ref(null)    // working copy, synced to active file
+const sourceRect      = ref(null)
+const destPoint       = ref(null)
+const coverRect       = ref(null)
 const mode            = ref('idle')
 const processing      = ref(false)
 const progressText    = ref('')
 const error           = ref('')
 const pageDims        = ref(null)
-
-// guard to prevent watchers from writing back during file switch
 let syncing = false
 
-// ── computed ─────────────────────────────────────────────────────────
-const activeFile  = computed(() => files.value[activeIdx.value] ?? null)
-const activePdf   = computed(() => activeFile.value?.pdfDoc ?? null)
+const activeFile      = computed(() => files.value[activeIdx.value] ?? null)
+const activePdf       = computed(() => activeFile.value?.pdfDoc ?? null)
+const canProcess      = computed(() => { const f = activeFile.value; return f && f.sourceRect && f.destPoint })
+const filesReadyCount = computed(() => files.value.filter(f => f.sourceRect && f.destPoint).length)
 
-const canProcess = computed(() => {
-  const f = activeFile.value
-  return f && f.sourceRect && f.destPoint
-})
-
-const filesReadyCount = computed(() =>
-  files.value.filter(f => f.sourceRect && f.destPoint).length
-)
-
-// ── localStorage (stores defaults for new files) ─────────────────────
+// ── localStorage ──
 const LS_SRC = 'pdfam-src'
 const LS_DST = 'pdfam-dst'
+const LS_COV = 'pdfam-cov'
 
 onMounted(() => {
   try {
     const s = localStorage.getItem(LS_SRC)
     const d = localStorage.getItem(LS_DST)
+    const c = localStorage.getItem(LS_COV)
     if (s) sourceRect.value = JSON.parse(s)
     if (d) destPoint.value  = JSON.parse(d)
-  } catch { /* ignore */ }
+    if (c) coverRect.value  = JSON.parse(c)
+  } catch {}
 })
 
-// sync working refs → active file + localStorage
-watch(sourceRect, (val) => {
+watch(sourceRect, v => {
   if (syncing) return
-  if (activeFile.value) activeFile.value.sourceRect = val ? { ...val } : null
-  if (val) localStorage.setItem(LS_SRC, JSON.stringify(val))
+  if (activeFile.value) activeFile.value.sourceRect = v ? { ...v } : null
+  if (v) localStorage.setItem(LS_SRC, JSON.stringify(v))
 }, { deep: true })
 
-watch(destPoint, (val) => {
+watch(destPoint, v => {
   if (syncing) return
-  if (activeFile.value) activeFile.value.destPoint = val ? { ...val } : null
-  if (val) localStorage.setItem(LS_DST, JSON.stringify(val))
+  if (activeFile.value) activeFile.value.destPoint = v ? { ...v } : null
+  if (v) localStorage.setItem(LS_DST, JSON.stringify(v))
 }, { deep: true })
 
-// ── file handling ────────────────────────────────────────────────────
+watch(coverRect, v => {
+  if (syncing) return
+  if (activeFile.value) activeFile.value.coverRect = v ? { ...v } : null
+  if (v) localStorage.setItem(LS_COV, JSON.stringify(v))
+  else localStorage.removeItem(LS_COV)
+}, { deep: true })
+
+// ── files ──
 async function onFilesAdded(list) {
   error.value = ''
-  const defaultSrc = sourceRect.value ? { ...sourceRect.value } : null
-  const defaultDst = destPoint.value  ? { ...destPoint.value }  : null
-
+  const dSrc = sourceRect.value ? { ...sourceRect.value } : null
+  const dDst = destPoint.value  ? { ...destPoint.value }  : null
+  const dCov = coverRect.value  ? { ...coverRect.value }  : null
   for (const f of list) {
     try {
-      const ab  = await f.arrayBuffer()
+      const ab = await f.arrayBuffer()
       const doc = await loadPdfForPreview(ab.slice(0))
       const dims = await getPageDimensions(doc)
       files.value.push({
-        name: f.name,
-        arrayBuffer: ab,
-        pdfDoc: markRaw(doc),
-        dims,
-        sourceRect: defaultSrc ? { ...defaultSrc } : null,
-        destPoint:  defaultDst ? { ...defaultDst } : null,
+        name: f.name, arrayBuffer: ab, pdfDoc: markRaw(doc), dims,
+        sourceRect: dSrc ? { ...dSrc } : null,
+        destPoint:  dDst ? { ...dDst } : null,
+        coverRect:  dCov ? { ...dCov } : null,
       })
-    } catch (e) {
-      console.error(e)
-      error.value = `Failed to load "${f.name}": ${e.message}`
-    }
+    } catch (e) { console.error(e); error.value = `Failed to load "${f.name}": ${e.message}` }
   }
   if (activeIdx.value < 0 && files.value.length) selectFile(0)
 }
 
 function selectFile(i) {
-  syncing = true
-  activeIdx.value = i
-  const file = files.value[i]
-  pageDims.value   = file?.dims ?? null
-  sourceRect.value = file?.sourceRect ? { ...file.sourceRect } : null
-  destPoint.value  = file?.destPoint  ? { ...file.destPoint }  : null
+  syncing = true; activeIdx.value = i
+  const f = files.value[i]
+  pageDims.value   = f?.dims       ?? null
+  sourceRect.value = f?.sourceRect ? { ...f.sourceRect } : null
+  destPoint.value  = f?.destPoint  ? { ...f.destPoint }  : null
+  coverRect.value  = f?.coverRect  ? { ...f.coverRect }  : null
   nextTick(() => { syncing = false })
 }
 
 function removeFile(i) {
   files.value.splice(i, 1)
   if (!files.value.length) {
-    activeIdx.value = -1; pageDims.value = null
-    syncing = true
-    sourceRect.value = null; destPoint.value = null
+    activeIdx.value = -1; pageDims.value = null; syncing = true
+    sourceRect.value = null; destPoint.value = null; coverRect.value = null
     nextTick(() => { syncing = false })
-  } else if (activeIdx.value >= files.value.length) {
-    selectFile(files.value.length - 1)
-  } else if (activeIdx.value === i) {
-    selectFile(Math.min(i, files.value.length - 1))
-  }
+  } else if (activeIdx.value >= files.value.length) selectFile(files.value.length - 1)
+  else if (activeIdx.value === i) selectFile(Math.min(i, files.value.length - 1))
 }
 
-function clearFiles() {
-  files.value = []; activeIdx.value = -1; pageDims.value = null; error.value = ''
-}
+function clearFiles() { files.value = []; activeIdx.value = -1; pageDims.value = null; error.value = '' }
 
-// ── apply to all ─────────────────────────────────────────────────────
 function applyToAll() {
-  const src = sourceRect.value ? { ...sourceRect.value } : null
-  const dst = destPoint.value  ? { ...destPoint.value }  : null
   files.value.forEach(f => {
-    if (src) f.sourceRect = { ...src }
-    if (dst) f.destPoint  = { ...dst }
+    f.sourceRect = sourceRect.value ? { ...sourceRect.value } : null
+    f.destPoint  = destPoint.value  ? { ...destPoint.value }  : null
+    f.coverRect  = coverRect.value  ? { ...coverRect.value }  : null
   })
 }
 
-// ── events from preview ──────────────────────────────────────────────
+// ── events ──
 function onSourceSelected(r) { sourceRect.value = { ...r }; mode.value = 'idle' }
 function onDestinationSet(p) { destPoint.value  = { ...p }; mode.value = 'idle' }
+function onCoverSelected(r)  { coverRect.value  = { ...r }; mode.value = 'idle' }
 function onPageInfo(info)    { pageDims.value = info }
 
-// ── processing ───────────────────────────────────────────────────────
+function clearCover() {
+  coverRect.value = null
+  if (activeFile.value) activeFile.value.coverRect = null
+  localStorage.removeItem(LS_COV)
+}
+
+// ── processing ──
 function download(data, filename) {
   const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }))
   const a = Object.assign(document.createElement('a'), { href: url, download: filename })
@@ -137,13 +130,8 @@ function download(data, filename) {
 
 async function processOne(i) {
   const f = files.value[i]
-  if (!f.sourceRect || !f.destPoint) {
-    throw new Error(`"${f.name}" has no source or destination set`)
-  }
-  const result = await processPdf(
-    f.arrayBuffer.slice(0), f.pdfDoc,
-    f.sourceRect, f.destPoint          // ← uses THIS file's coords
-  )
+  if (!f.sourceRect || !f.destPoint) throw new Error(`"${f.name}" has no source or destination set`)
+  const result = await processPdf(f.arrayBuffer.slice(0), f.pdfDoc, f.sourceRect, f.destPoint, f.coverRect)
   download(result, f.name.replace(/\.pdf$/i, '') + '-moved_address.pdf')
 }
 
@@ -156,11 +144,8 @@ async function processCurrent() {
 }
 
 async function processAll() {
-  const ready = files.value
-    .map((f, i) => ({ f, i }))
-    .filter(({ f }) => f.sourceRect && f.destPoint)
+  const ready = files.value.map((f, i) => ({ f, i })).filter(({ f }) => f.sourceRect && f.destPoint)
   if (!ready.length) return
-
   processing.value = true; error.value = ''
   try {
     for (let j = 0; j < ready.length; j++) {
@@ -175,12 +160,11 @@ async function processAll() {
 }
 
 function resetSettings() {
-  sourceRect.value = null; destPoint.value = null
+  sourceRect.value = null; destPoint.value = null; coverRect.value = null
   if (activeFile.value) {
-    activeFile.value.sourceRect = null
-    activeFile.value.destPoint = null
+    activeFile.value.sourceRect = null; activeFile.value.destPoint = null; activeFile.value.coverRect = null
   }
-  localStorage.removeItem(LS_SRC); localStorage.removeItem(LS_DST)
+  localStorage.removeItem(LS_SRC); localStorage.removeItem(LS_DST); localStorage.removeItem(LS_COV)
 }
 </script>
 
@@ -188,9 +172,8 @@ function resetSettings() {
   <div class="app">
     <header class="hdr">
       <img src="./assets/logo.svg" alt="" class="kaspar-logo">
-      <h1> Kaspars PDF Address Mover</h1>
-      <span class="sub">
-        Reposition shipping addresses for Dokumenttasche. <a href="https://github.com/kaspar-allenbach/shipping-address-mover">Github</a></span>
+      <h1>PDF Address Mover</h1>
+      <span class="sub">Reposition shipping addresses for Dokumenttasche</span>
     </header>
 
     <div class="body">
@@ -199,17 +182,13 @@ function resetSettings() {
         <section class="card">
           <h2 class="card-title">Upload PDFs</h2>
           <DropZone @files-added="onFilesAdded" />
-
           <div v-if="files.length" class="flist">
             <div class="flist-top">
               <span class="fcount">{{ filesReadyCount }}/{{ files.length }} ready</span>
               <button class="link-btn" @click="clearFiles">Clear all</button>
             </div>
-            <div
-              v-for="(f, i) in files" :key="i"
-              class="fitem" :class="{ active: i === activeIdx }"
-              @click="selectFile(i)"
-            >
+            <div v-for="(f, i) in files" :key="i"
+                 class="fitem" :class="{ active: i === activeIdx }" @click="selectFile(i)">
               <span class="fstatus">{{ f.sourceRect && f.destPoint ? '✅' : '⚠️' }}</span>
               <span class="fname" :title="f.name">{{ f.name }}</span>
               <span class="fdims">{{ f.dims.widthMm }}×{{ f.dims.heightMm }}</span>
@@ -222,12 +201,10 @@ function resetSettings() {
         <section class="card">
           <h2 class="card-title"><i class="dot red"></i>Source Address Area</h2>
           <p class="desc">Select where the address currently is on this PDF.</p>
-          <button
-            class="btn outline" :class="{ on: mode === 'select-source' }"
-            :disabled="!activePdf"
-            @click="mode = mode === 'select-source' ? 'idle' : 'select-source'"
-          >{{ mode === 'select-source' ? '✋ Drawing… (cancel)' : '✏️ Draw Rectangle' }}</button>
-
+          <button class="btn outline" :class="{ on: mode === 'select-source' }" :disabled="!activePdf"
+                  @click="mode = mode === 'select-source' ? 'idle' : 'select-source'">
+            {{ mode === 'select-source' ? '✋ Drawing… (cancel)' : '✏️ Draw Rectangle' }}
+          </button>
           <div v-if="sourceRect" class="grid4">
             <label>X<span class="iw"><input type="number" v-model.number="sourceRect.x" step="0.5" min="0"><em>mm</em></span></label>
             <label>Y<span class="iw"><input type="number" v-model.number="sourceRect.y" step="0.5" min="0"><em>mm</em></span></label>
@@ -235,29 +212,43 @@ function resetSettings() {
             <label>H<span class="iw"><input type="number" v-model.number="sourceRect.height" step="0.5" min="1"><em>mm</em></span></label>
           </div>
           <p v-else class="muted">No source area selected</p>
-
-          <button
-            v-if="files.length > 1 && sourceRect"
-            class="btn ghost small"
-            @click="applyToAll"
-          >📋 Apply current coords to all files</button>
+          <button v-if="files.length > 1 && sourceRect" class="btn ghost small" @click="applyToAll">
+            📋 Apply current coords to all files
+          </button>
         </section>
 
         <!-- destination -->
         <section class="card">
           <h2 class="card-title"><i class="dot green"></i>Destination Position</h2>
           <p class="desc">Set where the address should be placed (top‑left).</p>
-          <button
-            class="btn outline" :class="{ on: mode === 'set-destination' }"
-            :disabled="!activePdf || !sourceRect"
-            @click="mode = mode === 'set-destination' ? 'idle' : 'set-destination'"
-          >{{ mode === 'set-destination' ? '✋ Click on PDF… (cancel)' : '📌 Click to Place' }}</button>
-
+          <button class="btn outline" :class="{ on: mode === 'set-destination' }"
+                  :disabled="!activePdf || !sourceRect"
+                  @click="mode = mode === 'set-destination' ? 'idle' : 'set-destination'">
+            {{ mode === 'set-destination' ? '✋ Click on PDF… (cancel)' : '📌 Click to Place' }}
+          </button>
           <div v-if="destPoint" class="grid4 half">
             <label>X<span class="iw"><input type="number" v-model.number="destPoint.x" step="0.5" min="0"><em>mm</em></span></label>
             <label>Y<span class="iw"><input type="number" v-model.number="destPoint.y" step="0.5" min="0"><em>mm</em></span></label>
           </div>
           <p v-else class="muted">No destination set</p>
+        </section>
+
+        <!-- cover -->
+        <section class="card">
+          <h2 class="card-title"><i class="dot cover-dot"></i>White-Out Cover</h2>
+          <p class="desc">Optionally draw a white rectangle to hide overlapping text or lines.</p>
+          <button class="btn outline" :class="{ on: mode === 'select-cover' }" :disabled="!activePdf"
+                  @click="mode = mode === 'select-cover' ? 'idle' : 'select-cover'">
+            {{ mode === 'select-cover' ? '✋ Drawing… (cancel)' : '⬜ Draw Cover Area' }}
+          </button>
+          <div v-if="coverRect" class="grid4">
+            <label>X<span class="iw"><input type="number" v-model.number="coverRect.x" step="0.5" min="0"><em>mm</em></span></label>
+            <label>Y<span class="iw"><input type="number" v-model.number="coverRect.y" step="0.5" min="0"><em>mm</em></span></label>
+            <label>W<span class="iw"><input type="number" v-model.number="coverRect.width" step="0.5" min="1"><em>mm</em></span></label>
+            <label>H<span class="iw"><input type="number" v-model.number="coverRect.height" step="0.5" min="1"><em>mm</em></span></label>
+          </div>
+          <p v-else class="muted">No cover area set (optional)</p>
+          <button v-if="coverRect" class="btn ghost small" @click="clearCover">🗑️ Remove cover</button>
         </section>
 
         <!-- page info -->
@@ -268,40 +259,21 @@ function resetSettings() {
         <!-- actions -->
         <section class="card">
           <h2 class="card-title">Process &amp; Download</h2>
-
           <button class="btn primary" :disabled="!canProcess || processing" @click="processCurrent">
             📥 Process Current File
           </button>
-
-          <button
-            v-if="files.length > 1"
-            class="btn primary"
-            :disabled="filesReadyCount === 0 || processing"
-            @click="processAll"
-          >
+          <button v-if="files.length > 1" class="btn primary"
+                  :disabled="filesReadyCount === 0 || processing" @click="processAll">
             📥 Process {{ filesReadyCount }} Ready File{{ filesReadyCount !== 1 ? 's' : '' }}
           </button>
-
           <p v-if="progressText" class="progress">{{ progressText }}</p>
-
           <hr class="sep">
-          <button class="btn ghost" @click="resetSettings">🔄 Reset Source &amp; Destination</button>
+          <button class="btn ghost" @click="resetSettings">🔄 Reset All Settings</button>
         </section>
 
         <div v-if="error" class="err">
           ⚠️ {{ error }}
           <button class="x-btn" @click="error = ''">×</button>
-        </div>
-        <div class="card">
-          <h2 class="card-title">Info</h2>
-          <ul>
-            <li>Made for the  <a href="https://www.supportyourlocalartist.ch/en">Support your local Artist Shop</a></li>
-            <li>Made <a href="https://www.supportyourlocalartist.ch/collections/kaspar-allenbach">Kaspar Allenbach</a></li>
-            <li>This shit is vibecoded so beware!  <a href="https://github.com/kaspar-allenbach/shipping-address-mover">Contribute</a></li>
-            <li>It is made for the Fullfilment Guru Plugin of Shopify but works on every PDF. So you can Use it for any shipping label!</li>
-            <li>All actions are made in your Browser (no data is sent to any server)</li>
-          </ul>
-          
         </div>
       </aside>
 
@@ -311,12 +283,12 @@ function resetSettings() {
           <p>Upload a PDF to get started</p>
           <p class="muted small">The preview will appear here</p>
         </div>
-
         <template v-else>
           <div class="toolbar">
             <span class="badge" :class="mode">
               <template v-if="mode === 'select-source'">🔴 Draw a rectangle around the shipping address</template>
               <template v-else-if="mode === 'set-destination'">🟢 Click where the address should go</template>
+              <template v-else-if="mode === 'select-cover'">⬜ Draw a white-out cover rectangle</template>
               <template v-else>Preview — use the sidebar controls</template>
             </span>
           </div>
@@ -326,8 +298,10 @@ function resetSettings() {
               :mode="mode"
               :source-rect="sourceRect"
               :dest-point="destPoint"
+              :cover-rect="coverRect"
               @source-selected="onSourceSelected"
               @destination-set="onDestinationSet"
+              @cover-selected="onCoverSelected"
               @page-info="onPageInfo"
             />
           </div>
@@ -363,6 +337,10 @@ function resetSettings() {
   --c-text-muted:    #94a3b8;
   --c-text-dim:      #64748b;
   --c-text-white:    #fff;
+  --c-cover:    #94a3b8;
+--c-cover-bg: rgba(255, 255, 255, .65);
+
+
 
   /* accent */
   --c-accent:        #3b82f6;
@@ -423,7 +401,12 @@ ul { padding-left: 18px; margin-left: 2px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .red   { background: var(--c-red); }
 .green { background: var(--c-green); }
-
+/* add after the other .dot rules */
+.cover-dot {
+  background: var(--c-text-white);
+  box-shadow: inset 0 0 0 1.5px var(--c-cover);
+}
+.badge.select-cover { color: var(--c-cover); }
 /* ─── buttons ─── */
 .btn {
   display: block; width: 100%; padding: 8px 14px; border: none;

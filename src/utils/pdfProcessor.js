@@ -64,12 +64,14 @@ async function extractRegionAsImage(pdfDoc, pageNum, srcMm) {
   return new Uint8Array(await blob.arrayBuffer())
 }
 
-export async function processPdf(originalBytes, previewDoc, srcMm, dstMm, pageNum = 1) {
+export async function processPdf(originalBytes, previewDoc, srcMm, dstMm, coverRect, pageNum = 1) {
+
   const imgBytes = await extractRegionAsImage(previewDoc, pageNum, srcMm)
   const doc = await PDFDocument.load(originalBytes)
   const page = doc.getPages()[pageNum - 1]
   const { height: H } = page.getSize()
 
+  // white-out source area
   const sX = srcMm.x * MM_TO_PT
   const sW = srcMm.width * MM_TO_PT
   const sH = srcMm.height * MM_TO_PT
@@ -82,6 +84,19 @@ export async function processPdf(originalBytes, previewDoc, srcMm, dstMm, pageNu
     color: rgb(1, 1, 1), borderWidth: 0,
   })
 
+  // white-out cover area (optional)
+  if (coverRect) {
+    page.drawRectangle({
+      x:      coverRect.x * MM_TO_PT,
+      y:      H - (coverRect.y + coverRect.height) * MM_TO_PT,
+      width:  coverRect.width  * MM_TO_PT,
+      height: coverRect.height * MM_TO_PT,
+      color:  rgb(1, 1, 1),
+      borderWidth: 0,
+    })
+  }
+
+  // paste address at destination
   const png = await doc.embedPng(imgBytes)
   const dX = dstMm.x * MM_TO_PT
   const dY = H - (dstMm.y + srcMm.height) * MM_TO_PT
@@ -89,3 +104,4 @@ export async function processPdf(originalBytes, previewDoc, srcMm, dstMm, pageNu
 
   return await doc.save()
 }
+
