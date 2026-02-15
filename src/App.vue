@@ -1,26 +1,37 @@
 <script setup>
-import { ref, computed, watch, onMounted, markRaw } from 'vue'
+import { ref, computed, watch, onMounted, markRaw, nextTick } from 'vue'
 import DropZone from './components/DropZone.vue'
 import PdfPreview from './components/PdfPreview.vue'
 import { loadPdfForPreview, processPdf, getPageDimensions } from './utils/pdfProcessor.js'
 
 // ── state ────────────────────────────────────────────────────────────
-const files           = ref([])      // { name, arrayBuffer, pdfDoc, dims }
+const files           = ref([])      // { name, arrayBuffer, pdfDoc, dims, sourceRect, destPoint }
 const activeIdx       = ref(-1)
-const sourceRect      = ref(null)    // { x, y, width, height } mm top-left
-const destPoint       = ref(null)    // { x, y } mm top-left
-const mode            = ref('idle')  // idle | select-source | set-destination
+const sourceRect      = ref(null)    // working copy, synced to active file
+const destPoint       = ref(null)    // working copy, synced to active file
+const mode            = ref('idle')
 const processing      = ref(false)
 const progressText    = ref('')
 const error           = ref('')
-const pageDims        = ref(null)    // { widthMm, heightMm }
+const pageDims        = ref(null)
+
+// guard to prevent watchers from writing back during file switch
+let syncing = false
 
 // ── computed ─────────────────────────────────────────────────────────
 const activeFile  = computed(() => files.value[activeIdx.value] ?? null)
 const activePdf   = computed(() => activeFile.value?.pdfDoc ?? null)
-const canProcess  = computed(() => !!sourceRect.value && !!destPoint.value && files.value.length > 0)
 
-// ── localStorage ─────────────────────────────────────────────────────
+const canProcess = computed(() => {
+  const f = activeFile.value
+  return f && f.sourceRect && f.destPoint
+})
+
+const filesReadyCount = computed(() =>
+  files.value.filter(f => f.sourceRect && f.destPoint).length
+)
+
+// ── localStorage (stores defaults for new files) ─────────────────────
 const LS_SRC = 'pdfam-src'
 const LS_DST = 'pdfam-dst'
 
@@ -33,22 +44,37 @@ onMounted(() => {
   } catch { /* ignore */ }
 })
 
-watch(sourceRect, v => { if (v) localStorage.setItem(LS_SRC, JSON.stringify(v)) }, { deep: true })
-watch(destPoint,  v => { if (v) localStorage.setItem(LS_DST, JSON.stringify(v)) }, { deep: true })
+// sync working refs → active file + localStorage
+watch(sourceRect, (val) => {
+  if (syncing) return
+  if (activeFile.value) activeFile.value.sourceRect = val ? { ...val } : null
+  if (val) localStorage.setItem(LS_SRC, JSON.stringify(val))
+}, { deep: true })
+
+watch(destPoint, (val) => {
+  if (syncing) return
+  if (activeFile.value) activeFile.value.destPoint = val ? { ...val } : null
+  if (val) localStorage.setItem(LS_DST, JSON.stringify(val))
+}, { deep: true })
 
 // ── file handling ────────────────────────────────────────────────────
 async function onFilesAdded(list) {
   error.value = ''
+  const defaultSrc = sourceRect.value ? { ...sourceRect.value } : null
+  const defaultDst = destPoint.value  ? { ...destPoint.value }  : null
+
   for (const f of list) {
     try {
-      const ab = await f.arrayBuffer()
+      const ab  = await f.arrayBuffer()
       const doc = await loadPdfForPreview(ab.slice(0))
       const dims = await getPageDimensions(doc)
       files.value.push({
         name: f.name,
         arrayBuffer: ab,
-        pdfDoc: markRaw(doc),   // ← this is the entire fix
+        pdfDoc: markRaw(doc),
         dims,
+        sourceRect: defaultSrc ? { ...defaultSrc } : null,
+        destPoint:  defaultDst ? { ...defaultDst } : null,
       })
     } catch (e) {
       console.error(e)
@@ -59,25 +85,47 @@ async function onFilesAdded(list) {
 }
 
 function selectFile(i) {
+  syncing = true
   activeIdx.value = i
-  pageDims.value = files.value[i]?.dims ?? null
+  const file = files.value[i]
+  pageDims.value   = file?.dims ?? null
+  sourceRect.value = file?.sourceRect ? { ...file.sourceRect } : null
+  destPoint.value  = file?.destPoint  ? { ...file.destPoint }  : null
+  nextTick(() => { syncing = false })
 }
 
 function removeFile(i) {
   files.value.splice(i, 1)
-  if (!files.value.length) { activeIdx.value = -1; pageDims.value = null }
-  else if (activeIdx.value >= files.value.length) selectFile(files.value.length - 1)
-  else if (activeIdx.value === i) selectFile(Math.min(i, files.value.length - 1))
+  if (!files.value.length) {
+    activeIdx.value = -1; pageDims.value = null
+    syncing = true
+    sourceRect.value = null; destPoint.value = null
+    nextTick(() => { syncing = false })
+  } else if (activeIdx.value >= files.value.length) {
+    selectFile(files.value.length - 1)
+  } else if (activeIdx.value === i) {
+    selectFile(Math.min(i, files.value.length - 1))
+  }
 }
 
 function clearFiles() {
   files.value = []; activeIdx.value = -1; pageDims.value = null; error.value = ''
 }
 
+// ── apply to all ─────────────────────────────────────────────────────
+function applyToAll() {
+  const src = sourceRect.value ? { ...sourceRect.value } : null
+  const dst = destPoint.value  ? { ...destPoint.value }  : null
+  files.value.forEach(f => {
+    if (src) f.sourceRect = { ...src }
+    if (dst) f.destPoint  = { ...dst }
+  })
+}
+
 // ── events from preview ──────────────────────────────────────────────
-function onSourceSelected(r)    { sourceRect.value = { ...r }; mode.value = 'idle' }
-function onDestinationSet(p)    { destPoint.value  = { ...p }; mode.value = 'idle' }
-function onPageInfo(info)       { pageDims.value = info }
+function onSourceSelected(r) { sourceRect.value = { ...r }; mode.value = 'idle' }
+function onDestinationSet(p) { destPoint.value  = { ...p }; mode.value = 'idle' }
+function onPageInfo(info)    { pageDims.value = info }
 
 // ── processing ───────────────────────────────────────────────────────
 function download(data, filename) {
@@ -89,7 +137,13 @@ function download(data, filename) {
 
 async function processOne(i) {
   const f = files.value[i]
-  const result = await processPdf(f.arrayBuffer.slice(0), f.pdfDoc, sourceRect.value, destPoint.value)
+  if (!f.sourceRect || !f.destPoint) {
+    throw new Error(`"${f.name}" has no source or destination set`)
+  }
+  const result = await processPdf(
+    f.arrayBuffer.slice(0), f.pdfDoc,
+    f.sourceRect, f.destPoint          // ← uses THIS file's coords
+  )
   download(result, f.name.replace(/\.pdf$/i, '') + '-moved_address.pdf')
 }
 
@@ -102,13 +156,17 @@ async function processCurrent() {
 }
 
 async function processAll() {
-  if (!canProcess.value) return
+  const ready = files.value
+    .map((f, i) => ({ f, i }))
+    .filter(({ f }) => f.sourceRect && f.destPoint)
+  if (!ready.length) return
+
   processing.value = true; error.value = ''
   try {
-    for (let i = 0; i < files.value.length; i++) {
-      progressText.value = `Processing ${i + 1} / ${files.value.length}…`
-      await processOne(i)
-      if (i < files.value.length - 1) await new Promise(r => setTimeout(r, 400))
+    for (let j = 0; j < ready.length; j++) {
+      progressText.value = `Processing ${j + 1} / ${ready.length}…`
+      await processOne(ready[j].i)
+      if (j < ready.length - 1) await new Promise(r => setTimeout(r, 400))
     }
     progressText.value = '✅ Done!'
     setTimeout(() => { progressText.value = '' }, 2500)
@@ -118,20 +176,22 @@ async function processAll() {
 
 function resetSettings() {
   sourceRect.value = null; destPoint.value = null
+  if (activeFile.value) {
+    activeFile.value.sourceRect = null
+    activeFile.value.destPoint = null
+  }
   localStorage.removeItem(LS_SRC); localStorage.removeItem(LS_DST)
 }
 </script>
 
 <template>
   <div class="app">
-    <!-- ─── header ─── -->
     <header class="hdr">
       <h1>📦 PDF Address Mover</h1>
       <span class="sub">Reposition shipping addresses for Dokumenttasche</span>
     </header>
 
     <div class="body">
-      <!-- ─── sidebar ─── -->
       <aside class="sidebar">
         <!-- upload -->
         <section class="card">
@@ -140,7 +200,7 @@ function resetSettings() {
 
           <div v-if="files.length" class="flist">
             <div class="flist-top">
-              <span class="fcount">{{ files.length }} file{{ files.length !== 1 ? 's' : '' }}</span>
+              <span class="fcount">{{ filesReadyCount }}/{{ files.length }} ready</span>
               <button class="link-btn" @click="clearFiles">Clear all</button>
             </div>
             <div
@@ -148,6 +208,7 @@ function resetSettings() {
               class="fitem" :class="{ active: i === activeIdx }"
               @click="selectFile(i)"
             >
+              <span class="fstatus">{{ f.sourceRect && f.destPoint ? '✅' : '⚠️' }}</span>
               <span class="fname" :title="f.name">{{ f.name }}</span>
               <span class="fdims">{{ f.dims.widthMm }}×{{ f.dims.heightMm }}</span>
               <button class="x-btn" @click.stop="removeFile(i)">×</button>
@@ -158,7 +219,7 @@ function resetSettings() {
         <!-- source -->
         <section class="card">
           <h2 class="card-title"><i class="dot red"></i>Source Address Area</h2>
-          <p class="desc">Select where the address currently is.</p>
+          <p class="desc">Select where the address currently is on this PDF.</p>
           <button
             class="btn outline" :class="{ on: mode === 'select-source' }"
             :disabled="!activePdf"
@@ -172,6 +233,12 @@ function resetSettings() {
             <label>H<span class="iw"><input type="number" v-model.number="sourceRect.height" step="0.5" min="1"><em>mm</em></span></label>
           </div>
           <p v-else class="muted">No source area selected</p>
+
+          <button
+            v-if="files.length > 1 && sourceRect"
+            class="btn ghost small"
+            @click="applyToAll"
+          >📋 Apply current coords to all files</button>
         </section>
 
         <!-- destination -->
@@ -200,11 +267,17 @@ function resetSettings() {
         <section class="card">
           <h2 class="card-title">Process &amp; Download</h2>
 
-          <button class="btn primary" :disabled="!canProcess || !activeFile || processing" @click="processCurrent">
+          <button class="btn primary" :disabled="!canProcess || processing" @click="processCurrent">
             📥 Process Current File
           </button>
-          <button v-if="files.length > 1" class="btn primary" :disabled="!canProcess || processing" @click="processAll">
-            📥 Process All {{ files.length }} Files
+
+          <button
+            v-if="files.length > 1"
+            class="btn primary"
+            :disabled="filesReadyCount === 0 || processing"
+            @click="processAll"
+          >
+            📥 Process {{ filesReadyCount }} Ready File{{ filesReadyCount !== 1 ? 's' : '' }}
           </button>
 
           <p v-if="progressText" class="progress">{{ progressText }}</p>
@@ -219,7 +292,6 @@ function resetSettings() {
         </div>
       </aside>
 
-      <!-- ─── preview ─── -->
       <main class="preview-area">
         <div v-if="!activePdf" class="empty">
           <span class="empty-icon">📄</span>
@@ -398,6 +470,9 @@ function resetSettings() {
 .badge.set-destination  { color: #16a34a; }
 
 .scroll { flex: 1; overflow: auto; padding: 20px; }
+
+.fstatus { flex-shrink: 0; font-size: 12px; }
+.small { font-size: 11px !important; margin-top: 6px !important; }
 
 /* ─── responsive ─── */
 @media (max-width: 900px) {
