@@ -8,6 +8,7 @@ const props = defineProps({
   sourceRect: { type: Object, default: null },
   destPoint:  { type: Object, default: null },
   coverRect:  { type: Object, default: null },
+  showFoldMarks: { type: Boolean, default: false },
 })
 const emit = defineEmits(['source-selected', 'destination-set', 'cover-selected', 'page-info'])
 
@@ -152,6 +153,16 @@ function onDrawUp() {
   window.removeEventListener('mouseup',   onDrawUp)
 }
 
+const foldMarks = computed(() => {
+  if (!props.showFoldMarks || !renderInfo.value) return []
+  const third = 297 / 3          // A4 height ÷ 3 = 99 mm
+  const w = mmToPx(12)
+  return [
+    { y: mmToPx(third),     w, label: '99 mm' },
+    { y: mmToPx(third * 2), w, label: '198 mm' },
+  ]
+})
+
 // ── drag & resize ──
 function onRectDown(which, e)          { if (isIdle.value) startDrag(which, 'move', null, e) }
 function onHandleDown(which, handle, e) { if (isIdle.value) startDrag(which, 'resize', handle, e) }
@@ -238,6 +249,14 @@ function onHover(e) {
                @mousedown.stop.prevent="onHandleDown('cover', h, $event)"></div>
         </template>
       </div>
+
+      <!-- fold marks -->
+      <template v-if="foldMarks.length">
+        <div v-for="(m, i) in foldMarks" :key="'fold-'+i"
+            class="fold-mark" :style="{ top: m.y + 'px', width: m.w + 'px' }">
+          <span class="fold-label">{{ m.label }}</span>
+        </div>
+      </template>
 
       <!-- source rect -->
       <div v-if="srcStyle" class="rect src" :class="{ interactive: isIdle }" :style="srcStyle"
@@ -335,5 +354,25 @@ function onHover(e) {
   padding: 4px 10px; border-radius: 4px;
   font-size: 12px; font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
   pointer-events: none; z-index: 30;
+}
+.fold-mark {
+  position: absolute;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid #ef4444;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.fold-label {
+  position: absolute;
+  right: calc(100% + 5px);
+  top: -8px;
+  font-size: 9px;
+  color: #ef4444;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 }
 </style>

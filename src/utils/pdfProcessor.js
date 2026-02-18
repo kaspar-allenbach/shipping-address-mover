@@ -64,8 +64,34 @@ async function extractRegionAsImage(pdfDoc, pageNum, srcMm) {
   return new Uint8Array(await blob.arrayBuffer())
 }
 
-export async function processPdf(originalBytes, previewDoc, srcMm, dstMm, coverRect, pageNum = 1) {
+// ── fold marks: two horizontal ticks at 99mm and 198mm from top ──
+function drawFoldMarks(page) {
+  const { width, height } = page.getSize()
+  const thirdMm = 297 / 3 // 99mm
 
+  const markLengthPt = 12 * MM_TO_PT
+  const marks = [
+    thirdMm * MM_TO_PT,     // 99mm from top
+    thirdMm * 2 * MM_TO_PT, // 198mm from top
+  ]
+
+  for (const yFromTop of marks) {
+    const y = height - yFromTop // pdf-lib Y is from bottom
+
+    page.drawLine({
+      start: { x: width - markLengthPt, y },
+      end:   { x: width, y },
+      thickness: 0.5,
+      color: rgb(0, 0, 0),
+    })
+  }
+}
+
+export async function processPdf(
+  originalBytes, previewDoc, srcMm, dstMm, coverRect,
+  pageNum = 1,
+  showFoldMarks = false   // ← new parameter
+) {
   const imgBytes = await extractRegionAsImage(previewDoc, pageNum, srcMm)
   const doc = await PDFDocument.load(originalBytes)
   const page = doc.getPages()[pageNum - 1]
@@ -102,6 +128,10 @@ export async function processPdf(originalBytes, previewDoc, srcMm, dstMm, coverR
   const dY = H - (dstMm.y + srcMm.height) * MM_TO_PT
   page.drawImage(png, { x: dX, y: dY, width: sW, height: sH })
 
+  // ── fold marks ──
+  if (showFoldMarks) {
+    drawFoldMarks(page)
+  }
+
   return await doc.save()
 }
-

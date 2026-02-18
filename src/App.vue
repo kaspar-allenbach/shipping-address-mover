@@ -21,6 +21,8 @@ const activePdf       = computed(() => activeFile.value?.pdfDoc ?? null)
 const canProcess      = computed(() => { const f = activeFile.value; return f && f.sourceRect && f.destPoint })
 const filesReadyCount = computed(() => files.value.filter(f => f.sourceRect && f.destPoint).length)
 
+const showFoldMarks = ref(JSON.parse(localStorage.getItem('pdfam-fold') ?? 'false'))
+
 // ── localStorage ──
 const LS_SRC = 'pdfam-src'
 const LS_DST = 'pdfam-dst'
@@ -131,7 +133,15 @@ function download(data, filename) {
 async function processOne(i) {
   const f = files.value[i]
   if (!f.sourceRect || !f.destPoint) throw new Error(`"${f.name}" has no source or destination set`)
-  const result = await processPdf(f.arrayBuffer.slice(0), f.pdfDoc, f.sourceRect, f.destPoint, f.coverRect)
+  const result = await processPdf(
+    f.arrayBuffer.slice(0),
+    f.pdfDoc,
+    f.sourceRect,
+    f.destPoint,
+    f.coverRect,
+    1,
+    showFoldMarks.value   // ← the ref, not f.showFoldMarks
+  )
   download(result, f.name.replace(/\.pdf$/i, '') + '-moved_address.pdf')
 }
 
@@ -270,7 +280,12 @@ function resetSettings() {
           <hr class="sep">
           <button class="btn ghost" @click="resetSettings">🔄 Reset All Settings</button>
         </section>
-
+        <section v-if="pageDims" class="card compact" style="display:flex;align-items:center;gap:8px;">
+          <button class="btn outline small" :class="{ on: showFoldMarks }"
+                  @click="showFoldMarks = !showFoldMarks" style="margin:0;width:auto;">
+            {{ showFoldMarks ? '✅' : '▫️' }} DIN lang fold marks
+          </button>
+        </section>
         <div v-if="error" class="err">
           ⚠️ {{ error }}
           <button class="x-btn" @click="error = ''">×</button>
@@ -308,6 +323,7 @@ function resetSettings() {
             <PdfPreview
               :pdf-doc="activePdf"
               :mode="mode"
+              :show-fold-marks="showFoldMarks"
               :source-rect="sourceRect"
               :dest-point="destPoint"
               :cover-rect="coverRect"
